@@ -13,6 +13,7 @@
 /* Includes: Standard include files */
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 #if defined(_MSC_VER)
 typedef unsigned __int32 LOKI97_U32;
@@ -63,7 +64,11 @@ typedef uint32_t LOKI97_U32;
 
 typedef    unsigned char    BYTE;			/* unsigned byte */
 
+<<<<<<< codex/demonstrate-side-channel-vulnerability-in-loki97-apnvfz
 typedef    struct { LOKI97_U32 l,r; } ULONG64;	/* two 32-bit words */
+=======
+typedef    struct { uint32_t l,r; } ULONG64;	/* two 32-bit words */
+>>>>>>> main
 
 
 /*  The structure for key information */
@@ -102,6 +107,10 @@ int blockDecrypt(cipherInstance *cipher, keyInstance *key, BYTE *input,
 
 
 int self_test(char* hexkey, char* hexplain);
+
+/* Side-channel trace helpers for tests and diagnostics. */
+void loki97_sc_reset(void);
+void loki97_sc_snapshot(BYTE *s1_bits, BYTE *s2_bits, BYTE *p_bits);
 
 /* Side-channel trace helpers for tests and diagnostics. */
 void loki97_sc_reset(void);
