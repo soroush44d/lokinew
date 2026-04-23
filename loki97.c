@@ -24,6 +24,7 @@
 
 /* include standard AES C header file */
 #include "loki97.h"
+#include <ctype.h>
 
 /* Global defines and variables */
 
@@ -43,11 +44,24 @@
  */
 #define debuglevel DEBUG 
 
-
-/*  LOKI97 algorithm specific constants and tables */
-/* ........................................................................... */
+static BYTE S2[S2_SIZE];
 
-/* Generator polynomial for S-box S1, in GF(2<sup>13</sup>). */
+static ULONG64 P[0x100];
+
+#ifndef LOKI97_CONSTTIME
+#define LOKI97_CONSTTIME 1
+#endif
+
+static BYTE sc_trace_s1[S1_SIZE];
+static BYTE sc_trace_s2[S2_SIZE];
+static BYTE sc_trace_p[0x100];
+static int puthex(BYTE *out, int len, FILE *f);
+static BYTE lookup_s1(unsigned int index);
+static BYTE lookup_s2(unsigned int index);
+static ULONG64 lookup_p(unsigned int index);
+static unsigned int ct_eq_u32(unsigned int a, unsigned int b);
+
+int cipherInit(cipherInstance *cipher, BYTE mode, char *IV)
 #define S1_GEN 0x2911
 
 /* Size of S-box S1, for 13-bit inputs. */
@@ -155,11 +169,97 @@ int cipherInit(cipherInstance *cipher, BYTE mode, char *IV)
             for (j = 4, k = 7; j < 8; j++, k += 8)	/* do left half of P */
                 pval |= (long)((i >> j) & 0x1) << k;
             P[i].l = pval;
-            if (debuglevel > 5) fprintf(stderr,"%s: P[%02X] = %08X%08X\n", NAME, i, P[i].l, P[i].r);
-        }
+}
 
-	/* and remember that init has been done */
-	init_done = TRUE;
+
+void loki97_sc_reset(void)
+{
+    memset(sc_trace_s1, 0, sizeof(sc_trace_s1));
+    memset(sc_trace_s2, 0, sizeof(sc_trace_s2));
+    memset(sc_trace_p, 0, sizeof(sc_trace_p));
+}
+
+void loki97_sc_snapshot(BYTE *s1_bits, BYTE *s2_bits, BYTE *p_bits)
+{
+    if (s1_bits != NULL) {
+        memcpy(s1_bits, sc_trace_s1, sizeof(sc_trace_s1));
+    }
+    if (s2_bits != NULL) {
+        memcpy(s2_bits, sc_trace_s2, sizeof(sc_trace_s2));
+    }
+    if (p_bits != NULL) {
+        memcpy(p_bits, sc_trace_p, sizeof(sc_trace_p));
+    }
+}
+
+static unsigned int ct_eq_u32(unsigned int a, unsigned int b)
+{
+    unsigned int v = a ^ b;
+    v |= (0U - v);
+    v >>= 31;
+    return v ^ 1U;
+}
+
+static BYTE lookup_s1(unsigned int index)
+{
+    index &= (S1_SIZE - 1);
+#if LOKI97_CONSTTIME
+    BYTE value = 0;
+    unsigned int i;
+    for (i = 0; i < S1_SIZE; i++) {
+        unsigned int mask = 0U - ct_eq_u32(i, index);
+        sc_trace_s1[i] = 1;
+        value |= (BYTE)(S1[i] & (BYTE)mask);
+    }
+    return value;
+#else
+    sc_trace_s1[index] = 1;
+    return S1[index];
+#endif
+}
+
+static BYTE lookup_s2(unsigned int index)
+{
+    index &= (S2_SIZE - 1);
+#if LOKI97_CONSTTIME
+    BYTE value = 0;
+    unsigned int i;
+    for (i = 0; i < S2_SIZE; i++) {
+        unsigned int mask = 0U - ct_eq_u32(i, index);
+        sc_trace_s2[i] = 1;
+        value |= (BYTE)(S2[i] & (BYTE)mask);
+    }
+    return value;
+#else
+    sc_trace_s2[index] = 1;
+    return S2[index];
+#endif
+}
+
+static ULONG64 lookup_p(unsigned int index)
+{
+    index &= 0xFFU;
+#if LOKI97_CONSTTIME
+    ULONG64 value;
+    unsigned int i;
+    value.l = 0;
+    value.r = 0;
+    for (i = 0; i < 0x100; i++) {
+        uint32_t mask = (uint32_t)(0U - ct_eq_u32(i, index));
+        sc_trace_p[i] = 1;
+        value.l |= P[i].l & mask;
+        value.r |= P[i].r & mask;
+    }
+    return value;
+#else
+    sc_trace_p[index] = 1;
+    return P[index];
+#endif
+}
+
+
+/*
+ * Returns residue of base b to power 3 mod g in GF(2^n).
     }
 
     /* now fill out cipherInstance structure */
@@ -637,23 +737,25 @@ static int deCFB1(cipherInstance *cipher, keyInstance *key, BYTE *input,
             R.l = L.l ^ f_out.l; R.r = L.r ^ f_out.r;	/* R = L XOR f */
             L = nR;					/* L = nR */
             if (debuglevel > 1) fprintf(stderr," L[%02d]=%08X%08X; R[%02d]=%08X%08X; f(SK(%02d))=%08X%08X\n", i+1, L.l, L.r, i+1, R.l, R.r, k-2, f_out.l, f_out.r);
-        }
-	/* undo last swap */
-	L = R; R = nR;
+    int s;			/* s-box output value */
+    ULONG64 pval;
 
-	/* now process msgbit by getting stream key bit, XOR in and or to out */
-	keybit = L.l >> 31;
-	msgbit ^= keybit;
-	*outBuffer |= (msgbit << b);
-
-        if (debuglevel > 0) fprintf(stderr,"= %01X,%08X%08X%08X%08X\n", msgbit, L.l, L.r, R.l, R.r);
-
-	/* and update the CFB1 shift register (input buffer L,R) */
-	L.l = (L.l << 1) | (L.r >> 31); L.r = (L.r << 1) | (R.l >> 31);
-	R.l = (R.l << 1) | (R.r >> 31); R.r = (R.r << 1) | prev;
-
-	/* and update bit position counter */
-	b--;
+    s = lookup_s1((d.l>>24 | d.r<<8) & 0x1FFF);  pval = lookup_p((unsigned int)s); e.l  = pval.l>>7;  e.r  = pval.r>>7;
+    s = lookup_s2((d.l>>16)          &  0x7FF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>6;  e.r |= pval.r>>6;
+    s = lookup_s1((d.l>> 8)          & 0x1FFF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>5;  e.r |= pval.r>>5;
+    s = lookup_s2( d.l               &  0x7FF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>4;  e.r |= pval.r>>4;
+    s = lookup_s2((d.r>>24 | d.l<<8) &  0x7FF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>3;  e.r |= pval.r>>3;
+    s = lookup_s1((d.r>>16)          & 0x1FFF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>2;  e.r |= pval.r>>2;
+    s = lookup_s2((d.r>> 8)          &  0x7FF);  pval = lookup_p((unsigned int)s); e.l |= pval.l>>1;  e.r |= pval.r>>1;
+    s = lookup_s1( d.r               & 0x1FFF);  pval = lookup_p((unsigned int)s); e.l |= pval.l;     e.r |= pval.r;
+    f.l = lookup_s2((((e.l>>24) & 0xFF) | ((B.l>>21) &  0x700))) << 24 |
+          lookup_s2((((e.l>>16) & 0xFF) | ((B.l>>18) &  0x700))) << 16 |
+          lookup_s1((((e.l>> 8) & 0xFF) | ((B.l>>13) & 0x1F00))) <<  8 |
+          lookup_s1((((e.l    ) & 0xFF) | ((B.l>> 8) & 0x1F00)));
+    f.r = lookup_s2((((e.r>>24) & 0xFF) | ((B.l>> 5) &  0x700))) << 24 |
+          lookup_s2((((e.r>>16) & 0xFF) | ((B.l>> 2) &  0x700))) << 16 |
+          lookup_s1((((e.r>> 8) & 0xFF) | ((B.l<< 3) & 0x1F00))) <<  8 |
+          lookup_s1((( e.r      & 0xFF) | ((B.l<< 8) & 0x1F00)));
 	/* and move to next input/output byte if necessary */
 	if (b<0) { b = 7; input++; outBuffer++; *outBuffer = 0; }
     }
@@ -822,19 +924,13 @@ static ULONG64 charToULONG64(char *hex)
     I.r |= fromHex(*hex++) <<  8;
     I.r |= fromHex(*hex++) <<  4;
     I.r |= fromHex(*hex++);
-    return I;
+    char* hexcipher = "75080E359F10FE640144B35C57128DAD";
+    char* hexIV = "00000000000000000000000000000000";
+
+    BYTE plain[BLOCK_SIZE];
+    charToBYTE(plain, hexplain, sizeof(plain));
+    if (memcmp(etemp, cipher, sizeof(etemp)) != 0) enok = FALSE;
 }
-
-
-/* Returns number from 0 to 15 corresponding to hex digit ch */
-static int fromHex (char ch)
-{
-    if (ch >= '0' && ch <= '9')
-        return ch - '0';
-    else if (ch >= 'A' && ch <= 'F')
-        return ch - 'A' + 10;
-    else if (ch >= 'a' && ch <= 'f')
-        return ch - 'a' + 10;
     else
         return 0;
 }

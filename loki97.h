@@ -13,6 +13,7 @@
 /* Includes: Standard include files */
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 /* Defines: AES */
 
@@ -56,7 +57,7 @@
 
 typedef    unsigned char    BYTE;			/* unsigned byte */
 
-typedef    struct { unsigned long l,r; } ULONG64;	/* 64bit unsigned int */
+typedef    struct { uint32_t l,r; } ULONG64;	/* two 32-bit words */
 
 
 /*  The structure for key information */
@@ -95,4 +96,8 @@ int blockDecrypt(cipherInstance *cipher, keyInstance *key, BYTE *input,
 
 
 int self_test(char* hexkey, char* hexplain);
+
+/* Side-channel trace helpers for tests and diagnostics. */
+void loki97_sc_reset(void);
+void loki97_sc_snapshot(BYTE *s1_bits, BYTE *s2_bits, BYTE *p_bits);
 
