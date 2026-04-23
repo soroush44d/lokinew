@@ -14,6 +14,13 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(_MSC_VER)
+typedef unsigned __int32 LOKI97_U32;
+#else
+#include <stdint.h>
+typedef uint32_t LOKI97_U32;
+#endif
+
 /* Defines: AES */
 
 #define     DIR_ENCRYPT     0    /*  Are we encrypting?  */
@@ -56,7 +63,7 @@
 
 typedef    unsigned char    BYTE;			/* unsigned byte */
 
-typedef    struct { unsigned long l,r; } ULONG64;	/* 64bit unsigned int */
+typedef    struct { LOKI97_U32 l,r; } ULONG64;	/* two 32-bit words */
 
 
 /*  The structure for key information */
@@ -95,4 +102,8 @@ int blockDecrypt(cipherInstance *cipher, keyInstance *key, BYTE *input,
 
 
 int self_test(char* hexkey, char* hexplain);
+
+/* Side-channel trace helpers for tests and diagnostics. */
+void loki97_sc_reset(void);
+void loki97_sc_snapshot(BYTE *s1_bits, BYTE *s2_bits, BYTE *p_bits);
 
